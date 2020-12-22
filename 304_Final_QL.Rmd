@@ -1,0 +1,331 @@
+---
+title: "The Election Result Would Not Change If All Ages Citizens Had Voted for the 2019 Canadian Federal Election"
+author: "Qing Li(1005148010)"
+Code and data supporting this analysis is available at: https://github.com/xixiaoguai727/sta304ps2
+date: "2020/12/22"
+output: pdf_document
+---
+
+```{r setup, echo=FALSE}
+install.packages("devtools")
+devtools::install_github("hodgettsp/cesR")
+# install cesR package
+devtools::install_github("hodgettsp/cesR")
+
+# load cesR package
+library(cesR)
+library(labelled)
+get_ces("ces2019_web")
+# convert dataframe values to factor type
+ces2019_web <- to_factor(ces2019_web)
+# check column heads for dataframe
+head(ces2019_web)
+keep_var <- c('cps19_gender', 'cps19_province', 'cps19_education',
+              'cps19_age','cps19_votechoice')
+ces2019_web <- ces2019_web[, keep_var]
+# Read the Census data
+cens <- read.csv("2016 Census data(Highest level of educational attainment (general) by sex and selected age groups).csv", header = F, skip = 1, stringsAsFactors = F)
+names(cens) <- c('Geographic_code','Geographic_name','Global_nonresponse_rate',
+                 'Data_quality_flag','Age','Sex','Edu1','Edu2',
+                 'Edu3','Edu4','Edu5','Edu6','Edu7','Edu8',
+                 'Edu9','Edu10','Edu11','Edu12','Edu13','Edu14')
+```
+
+#Abstract
+The objective of this report is to predict which party will win the election if all ages citizens in Canada had voted for the 2019 Canadian Federal Election. Models will be built based on the online survey results of Canadian Election Study in 2019. Next, apply the model to the 2016 census data to find which party will have the highest votes. Finally, comparing the predicted result with the actual election result of 2019 to find if there will exist any difference.
+
+_Keywords: 2019 Canadian Federal Election, multiclass classification, multilevel regression with poststratification(MRP), logistic regression, ROC, AUC, Softmax._
+
+## Introduction 
+The survey result of 2019 Canadian Election Study has more than 37000 survey answers on over 600 questions. In our project, the target population is all Canadian citizens; the sample population consists of 37822 respondents. 
+
+In the model, "age","province", "education" and "gender" will be considered as independent variables and "vote choice" will be the only response variable. Additionally, eight vote choices are included in the outcome variable and their distributions are shown in Figure 1. It reveals that the majority chose "Liberal Party"; "Conservative Party" was the second popular choice; "People's Party" had the lowest vote. Next, using the mentioned variables to built a logistic regression, and then implement this model to the 2016 census data to predict if all ages citizens had voted then what would happen to the election result.
+
+```{r, echo=FALSE}
+library(dplyr)
+choice <- data.frame(table(ces2019_web$cps19_votechoice))
+choice$Var1 <- as.character(choice$Var1)
+choice$Var1 <- ifelse(choice$Var1 == 'Bloc Québécois', 'Bloc Qu',
+                      choice$Var1)
+choice <- choice[order(-choice$Freq),]
+choice
+
+barplot(choice$Freq,
+        names.arg=c("Liberal",
+                    "Conservative",
+                    "Noanswer",
+                    "ndp",
+                    "Green",
+                    "BlocQu",
+                    "Peoples",
+                    "Another"), main="Figure 1", horiz = F)
+```
+
+## Data
+
+The survey data is obtained from Canadian Election Study, and the census data is obtained from Statistics Canada. The summary of survey data is shown below. Next, to consist with the census data, variable "age" will be divided into five groups, "education" will be divided into six groups, "gender" will contain three groups, and "province" will keep the same. For the outcome variable, "Liberal Party", "Green Party", "Conservative Party", "ndp" and "Bloc Qu" will keep the same; other choices will be combined together, and they will be called as "Others". In addition, the data contain lots of non-response, and the reason why people refused to vote for a party was that they did not care about the election result, or they did not trust any of the parties.
+
+```{r,, echo=FALSE}
+summary(ces2019_web)
+```
+
+```{r, echo=F}
+#Dividing age into the following groups
+  #25 to 34
+  #35 to 44
+  #45 to 54
+  #55 to 64
+ces2019_web$age_gp <- "Others"
+ces2019_web$age_gp <- ifelse(ces2019_web$cps19_age >= 25 & ces2019_web$cps19_age < 35, 
+                             '25 to 34', ces2019_web$age_gp)
+ces2019_web$age_gp <- ifelse(ces2019_web$cps19_age >= 35 & ces2019_web$cps19_age < 45, 
+                             '35 to 44', ces2019_web$age_gp)
+ces2019_web$age_gp <- ifelse(ces2019_web$cps19_age >= 45 & ces2019_web$cps19_age < 55, 
+                             '45 to 54', ces2019_web$age_gp)
+ces2019_web$age_gp <- ifelse(ces2019_web$cps19_age >= 55 & ces2019_web$cps19_age < 65, 
+                             '55 to 64', ces2019_web$age_gp)
+
+#gender
+ces2019_web$gender <- ifelse(as.character(ces2019_web$cps19_gender) == 'A man',
+                             'Male', 'Others')
+
+ces2019_web$gender <- ifelse(as.character(ces2019_web$cps19_gender) == 'A woman',
+                             'Female', ces2019_web$gender)
+
+#province
+ces2019_web$province <- ces2019_web$cps19_province
+
+#education
+ces2019_web$education <- 'Edu'
+ces2019_web$education <- ifelse(ces2019_web$cps19_education %in% c("Don't know/ Prefer not to answer",    
+                                                                   "Completed elementary school",            
+                                                                   "Some elementary school",                    
+                                                                   "No schooling"),"Edu2", ces2019_web$education)
+
+ces2019_web$education <- ifelse(ces2019_web$cps19_education %in% c("Completed secondary/ high school",    
+                                                                   "Some secondary/ high school"),
+                                "Edu3", ces2019_web$education)
+
+ces2019_web$education <- ifelse(ces2019_web$cps19_education %in% c("Some technical, community college, CEGEP, College Classique"),
+                                "Edu4", ces2019_web$education)
+
+ces2019_web$education <- ifelse(ces2019_web$cps19_education %in% c("Completed technical, community college, CEGEP, College Classique"),
+                                "Edu5", ces2019_web$education)
+
+ces2019_web$education <- ifelse(ces2019_web$cps19_education %in% c("Some university"),
+                                "Edu6", ces2019_web$education)
+
+ces2019_web$education <- ifelse(ces2019_web$cps19_education %in% c("Master's degree",
+                                                                   "Bachelor's degree",
+                                                                   "Professional degree or doctorate"),
+                                "Edu7", ces2019_web$education)
+
+ces2019_web$votechoice <- as.character(ces2019_web$cps19_votechoice)
+ces2019_web$votechoice <- ifelse(ces2019_web$votechoice == 'Bloc Québécois',
+                                 'Bloc Qu',ces2019_web$votechoice)
+
+modeldat <- ces2019_web[,c("votechoice","age_gp", "gender",
+                              "province", "education")]
+modeldat <- modeldat[is.na(modeldat$votechoice) == F,]
+
+modeldat$vote1 <- ifelse(modeldat$votechoice == "Liberal Party", 1, 0)
+modeldat$vote2 <- ifelse(modeldat$votechoice == "Green Party", 1, 0)
+modeldat$vote3 <- ifelse(modeldat$votechoice == "Conservative Party", 1, 0)
+modeldat$vote4 <- ifelse(modeldat$votechoice == "ndp", 1, 0)
+modeldat$vote5 <- ifelse(modeldat$votechoice == "Bloc Qu", 1, 0)
+modeldat$vote6 <- ifelse(modeldat$vote1+ modeldat$vote2+ modeldat$vote3+
+                             modeldat$vote4+modeldat$vote5 == 0, 1, 0)
+
+modeldat$age_gp <- as.factor(modeldat$age_gp)
+modeldat$gender <- as.factor(modeldat$gender)
+modeldat$education <- as.factor(modeldat$education)
+modeldat$province <- as.factor(modeldat$province)
+```
+
+Education levels from the census data are renamed by "Edu*", and the mapping table is shown below.
+
+```{r,, echo=FALSE}
+knitr::include_graphics('varmapping.PNG')
+```
+
+For the census data, the summary is shown below. It contains the summary of provinces, age, sex, and each education level respectively. 
+```{r, echo=FALSE}
+summary(cens)
+```
+
+```{r, echo=F}
+cens1 <- cens[!(cens$Age %in% c('25 to 64','All ages, 15-plus')),
+             setdiff(names(cens), c('Geographic_code',
+                                    'Global_nonresponse_rate',
+                                    'Data_quality_flag','Edu8',
+                                    'Edu9','Edu10','Edu11',
+                                    'Edu12','Edu13','Edu14'))]
+
+cens2 <- cens[cens$Age == '25 to 64',
+             setdiff(names(cens), c('Geographic_code',
+                                    'Age',
+                                    'Global_nonresponse_rate',
+                                    'Data_quality_flag','Edu8',
+                                    'Edu9','Edu10','Edu11',
+                                    'Edu12','Edu13','Edu14'))]
+cens3 <- cens[cens$Age == 'All ages, 15-plus',
+             setdiff(names(cens), c('Geographic_code',
+                                    'Global_nonresponse_rate',
+                                    'Data_quality_flag','Edu8',
+                                    'Edu9','Edu10','Edu11',
+                                    'Edu12','Edu13','Edu14'))]
+
+cens4 <- cens3 %>% 
+  left_join(cens2, by = c('Geographic_name'='Geographic_name','Sex'='Sex')) %>%
+  as.data.frame()
+cens4$Edu1 <- cens4$Edu1.x - cens4$Edu1.y
+cens4$Edu2 <- cens4$Edu2.x - cens4$Edu2.y
+cens4$Edu3 <- cens4$Edu3.x - cens4$Edu3.y
+cens4$Edu4 <- cens4$Edu4.x - cens4$Edu4.y
+cens4$Edu5 <- cens4$Edu5.x - cens4$Edu5.y
+cens4$Edu6 <- cens4$Edu6.x - cens4$Edu6.y
+cens4$Edu7 <- cens4$Edu7.x - cens4$Edu7.y
+cens4$Age <- "Others"
+cens4 <- cens4[,setdiff(names(cens4), 
+                        c("Edu1.x", "Edu2.x","Edu3.x", "Edu4.x",
+                          "Edu5.x","Edu6.x","Edu7.x","Edu1.y",
+                          "Edu2.y", "Edu3.y","Edu4.y","Edu5.y",
+                          "Edu6.y","Edu7.y"))]
+cens.final <- rbind(cens1, cens4)
+
+all.var <- names(cens.final)
+cens.final2 <- data.frame()
+for (i in 1:7) {
+  t <- cens.final[,c(1,2,3,i+3)]
+  t$education <- all.var[i+3]
+  names(t) <- c("Geographic_name", "Age", "Sex", "TotalCnt", "education" )
+  cens.final2 <- rbind(cens.final2, t)
+}
+cens.final2 <- cens.final2[!(cens.final2$Geographic_name == 'Canada'),]
+cens.final2 <- cens.final2[!(cens.final2$education == 'Edu1'),]
+names(cens.final2) <- c("province", "age_gp", "gender", "TotalCnt", "education")
+cens.final2$gender <- ifelse(cens.final2$gender == 'Both sexes', 'Others',cens.final2$gender)
+```
+
+\newpage
+
+## Model
+
+The survey data consists of a lot of multi-choice questions, and we would like to transfer them to multi-binary model by using one v.s rest method[1]. To explain, if we have $n$ levels in outcome, then $n$ outcome will be obtained. For each vote choice, it would be a binary question. In this project, the first vote choice would be choosing "Liberal Party" or not, and other vote choice works in the same way.
+
+For binary questions, logistic regression model[5] will be trained by using the equation below. In addition, categorical variables with $n$ levels will contain $n-1$ dummy variables. Next, each choice will train one logistic regression model, and then implement the model to census data to obtain the predicted probability of choosing the corresponding party.
+
+$$ log(\frac{p}{1-p})= \beta_0+\beta_1 age + \beta_2gender + \beta_3education + \beta_4province$$
+
+After that, one combined features group will have six predicted probability on different party. Then, we use softmax method[8] to convert the probability into a range of [0~1]. The formula of softmax method is shown below.
+
+$$p'_i = \frac{p_i}{\sum(p_i)}$$
+
+We use the ROC curve[3] to see how well the model is. Specifically, the ROC curve is "a graphical plot that illustrates the diagnostic ability of a binary classifier system as its discrimination threshold is varied. The ROC curve is created by plotting the true positive rate (TPR) against the false positive." The area under ROC curve is called AUC. The larger the AUC is, the better the model will be. For our six binary models, the six corresponding ROC curves are shown below. We can see that the areas are large there, in other words, the AUC is large. Therefore, we can conclude that our model is built properly.
+
+```{r, echo=FALSE}
+library(pROC)
+pred.dt <- matrix(rep(0, nrow(cens.final2) * 6), ncol = 6)
+vlist <- c("vote1", "vote2", "vote3", "vote4", "vote5", "vote6")
+par(mfrow= c(2,3))
+choice <- data.frame(table(ces2019_web$cps19_votechoice))
+table(modeldat$vote5)
+for (i in 1:length(vlist)) {
+  v <- vlist[i]
+  formula <- paste0("as.factor(",v,") ~  age_gp + gender + education + province")
+  glm.m1 <- glm(as.formula(formula),
+                 data = modeldat,
+                 family = binomial)
+  glm.m1.pred <- predict(glm.m1, newdata = cens.final2, type = "response")
+  pred.dt[,i] <- glm.m1.pred
+  eval(parse(text = paste0("roc1<-roc(modeldat$",v,", glm.m1$fitted.values)")))
+  plot(roc1,col = "blue", main = paste0("ROC Cureve of ", v))
+}
+par(mfrow= c(1,1))
+```
+\newpage
+
+## Results
+
+One of the model results is shown below. It reflects that all features are significant when significance level is set as 0.1, but if we set the significance level to 0.05, then variable "education" would not be significant any more. Moreover, for the coefficient of each variable, let's take "gender" as the example, there are three levels in variable "gender"(_Male,Female,Others_). Specifically, female level is treated as the reference; the other two will compare with it. In addition, the coefficient of "genderMale" is -0.34731, it means that the odds ratio is $exp(-0.34731) = 0.7066$.
+
+```{r, echo=FALSE}
+summary(glm.m1)
+```
+
+```{r, echo=FALSE}
+party.list <- c("Liberal Party", "Green Party","Conservative Party","ndp","Bloc Qu", "Others")
+totalp <- apply(pred.dt, 1, sum)
+pred.dt <- as.data.frame(pred.dt/totalp)
+p <- round(apply(pred.dt,2, mean),3)
+names(p) <- party.list
+cat("The predicted probability are:\n")
+p <- as.data.frame(p)
+p$party <- c("Liberal", "Green","Conservative","ndp","Bloc Qu", "Others")
+p <- p[order(-p$p),]
+barplot(p$p,names.arg=p$party, horiz = F, main = "Estimated Probability of Each arty")
+```
+As we can see from the above plot, "Liberal Party" has the biggest predicted probability, which is approximately 0.26. "Conservative Party" is the second highest. Thus, we suggest that __Liberal Party__ would win the election if all ages citizens in Canada had voted for the 2019 Canadian Federal Election. Our predicted result is exactly same as the actual election result of 2019[6].
+
+```{r, echo=FALSE}
+cens.final.pred <- cbind(cens.final2, pred.dt)
+finalvote <- c(sum(cens.final.pred$TotalCnt* cens.final.pred$V1),
+               sum(cens.final.pred$TotalCnt* cens.final.pred$V2),
+               sum(cens.final.pred$TotalCnt* cens.final.pred$V3),
+               sum(cens.final.pred$TotalCnt* cens.final.pred$V4),
+               sum(cens.final.pred$TotalCnt* cens.final.pred$V5),
+               sum(cens.final.pred$TotalCnt* cens.final.pred$V6))/sum(cens.final.pred$TotalCnt)
+cat(party.list[which.max(finalvote)], "will WIN.....")  
+```
+
+\newpage
+
+## Discussion
+
+In this analysis, the online survey results of Canadian Election Study in 2019 is used as sample to build our prediction models. The survey contains multi-choice questions, and we have transferred them to binary questions, and we use softmax method to generate the predicted probability. According to our predicted result, we can conclude that the election result would not change if all ages citizens were considered. In other words, the winner will always be __Liberal Party__. However, the gap between   __Liberal Party__ and __Conservative Party__ is not as big as the actual election result has showed. There is a change that the __Conservative Party__ would predicted to win if we change the predictor variables or census data. 
+
+In addition, here are some future improvements for making such prediction. Firstly, we can design and implement a better vote survey with more questions and try to get as many respondents to take the survey. Secondly, applying some other models such as decision tree to predict a more accurate result. Finally, we can add more predictor variables since other factors would influence the vote intention. 
+
+
+\newpage
+
+## References
+
+[1] Brownlee, J. (2020, September 07). One-vs-Rest and One-vs-One for Multi-Class Classification. Retrieved December 22, 2020, from https://machinelearningmastery.com/one-vs-rest-and-one-vs-one-for-multi-class-classification/
+
+[2] Canada Federal Elections. (1970, December 01). Retrieved December 22, 2020, from https://www.elections.ca/home.aspx
+
+[3] Grace-Martin, K., Oehr, & Chamberlain, K. (2018, December 13). What Is an ROC Curve? Retrieved December 22, 2020, from https://www.theanalysisfactor.com/what-is-an-roc-curve/
+
+[4] Hadley Wickham, Romain François, Lionel Henry and Kirill Müller (2020).
+  dplyr: A Grammar of Data Manipulation. https://dplyr.tidyverse.org, https://github.com/tidyverse/dplyr.
+
+[5] Logistic Regression. (n.d.). Retrieved December 22, 2020, from http://www.cookbook-r.com/Statistical_analysis/Logistic_regression/.
+
+[6] Newton, P. (2019, October 22). Buckle up -- Canada's election will be a cliffhanger. Retrieved December 22, 2020, from https://www.cnn.com/2019/10/20/world/canada-election-october-21-intl/index.html
+
+[7] Paul A. Hodgetts and Rohan Alexander (2020). cesR: Access the CES Datasets a
+  Little Easier.. R package version 0.1.0.
+
+[8] Softmax Function. (2019, May 17). Retrieved December 22, 2020, from https://deepai.org/machine-learning-glossary-and-terms/softmax-layer
+
+[9] Statistical Modeling, Causal Inference, and Social Science. (n.d.). Retrieved December 22, 2020, from https://statmodeling.stat.columbia.edu/
+
+[10] The element of statistic learning: Linear model for Classification. (n.d.). Retrieved December 22, 2020, from https://web.stanford.edu/~hastie/ElemStatLearn/
+
+[11] Xavier Robin, Natacha Turck, Alexandre Hainard, Natalia Tiberti, Frédérique
+  Lisacek, Jean-Charles Sanchez and Markus Müller (2011). pROC: an open-source
+  package for R and S+ to analyze and compare ROC curves. BMC Bioinformatics,
+  12, p. 77.  DOI: 10.1186/1471-2105-12-77
+  <http://www.biomedcentral.com/1471-2105/12/77/>
+
+
+
+
+
+
+
+
+
+
+
